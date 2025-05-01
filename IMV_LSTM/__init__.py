@@ -1,1 +1,4 @@
-__all__ = ["networks"]
+__all__ = [
+    "networks",
+    "min_max_scaler",
+]
