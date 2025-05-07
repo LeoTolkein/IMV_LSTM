@@ -33,8 +33,9 @@ class IMVTensorLSTM(torch.jit.ScriptModule):
     def __init__(self, input_dim, output_dim, n_units, init_std=0.02):
         super().__init__()
         # * 此处使用的是正态分布初始化
-        # * weight matrices for inputs x to cell state update j (这是这篇
-        # * 文章使用的特殊符号，基本等同于 standard LSTM 中的 c_tilde)
+        # * input_dim 对应原文中 N 的维度
+        # * weight matrices for inputs x to cell state update j
+        # * j 是这篇论文使用的特殊符号，基本等同于 standard LSTM 中的 c_tilde
         self.U_j = nn.Parameter(torch.randn(input_dim, 1, n_units)*init_std)
         # * weight matrices for inputs x to input gate i
         self.U_i = nn.Parameter(torch.randn(input_dim, 1, n_units)*init_std)
@@ -68,20 +69,36 @@ class IMVTensorLSTM(torch.jit.ScriptModule):
     @torch.jit.script_method
     def forward(self, x):
         # * hidden state 
+        # * 猜测： x.shape[0] 是 batch size
+        # * 后两个维度分别代表 input_dim 和 hidden_dim
+        # * 此处的 .cuda() 操作在正规的代码里不推荐，因为要求必须有支持 
+        # * cuda 的GPU，如果没有会直接扔报错。
         h_tilda_t = torch.zeros(x.shape[0], self.input_dim, self.n_units).cuda()
         c_tilda_t = torch.zeros(x.shape[0], self.input_dim, self.n_units).cuda()
         outputs = torch.jit.annotate(List[Tensor], [])
         for t in range(x.shape[1]):
-            # eq 1
-            j_tilda_t = torch.tanh(torch.einsum("bij,ijk->bik", h_tilda_t, self.W_j) + \
-                                   torch.einsum("bij,jik->bjk", x[:,t,:].unsqueeze(1), self.U_j) + self.b_j)
+            # eq 1 -- cell state update
+            j_tilda_t = torch.tanh(
+                        torch.einsum("bij,ijk->bik", h_tilda_t, self.W_j)
+                        + torch.einsum("bij,jik->bjk", x[:,t:t+1,:], self.U_j) 
+                        + self.b_j
+                    )
             # eq 5
-            i_tilda_t = torch.sigmoid(torch.einsum("bij,ijk->bik", h_tilda_t, self.W_i) + \
-                                torch.einsum("bij,jik->bjk", x[:,t,:].unsqueeze(1), self.U_i) + self.b_i)
-            f_tilda_t = torch.sigmoid(torch.einsum("bij,ijk->bik", h_tilda_t, self.W_f) + \
-                                torch.einsum("bij,jik->bjk", x[:,t,:].unsqueeze(1), self.U_f) + self.b_f)
-            o_tilda_t = torch.sigmoid(torch.einsum("bij,ijk->bik", h_tilda_t, self.W_o) + \
-                                torch.einsum("bij,jik->bjk", x[:,t,:].unsqueeze(1), self.U_o) + self.b_o)
+            i_tilda_t = torch.sigmoid(
+                        torch.einsum("bij,ijk->bik", h_tilda_t, self.W_i)
+                        + torch.einsum("bij,jik->bjk", x[:,t:t+1,:], self.U_i)
+                        + self.b_i
+                    )
+            f_tilda_t = torch.sigmoid(
+                        torch.einsum("bij,ijk->bik", h_tilda_t, self.W_f)
+                        + torch.einsum("bij,jik->bjk", x[:,t:t+1,:], self.U_f)
+                        + self.b_f
+                    )
+            o_tilda_t = torch.sigmoid(
+                        torch.einsum("bij,ijk->bik", h_tilda_t, self.W_o)
+                        + torch.einsum("bij,jik->bjk", x[:,t:t+1,:], self.U_o)
+                        + self.b_o
+                    )
             # eq 6
             c_tilda_t = c_tilda_t*f_tilda_t + i_tilda_t*j_tilda_t
             # eq 7
@@ -132,7 +149,7 @@ class IMVFullLSTM(torch.jit.ScriptModule):
         for t in range(x.shape[1]):
             # eq 1
             j_tilda_t = torch.tanh(torch.einsum("bij,ijk->bik", h_tilda_t, self.W_j) + \
-                                   torch.einsum("bij,jik->bjk", x[:,t,:].unsqueeze(1), self.U_j) + self.b_j)
+                                   torch.einsum("bij,jik->bjk", x[:,t:t+1,:], self.U_j) + self.b_j)
             inp =  torch.cat([x[:, t, :], h_tilda_t.view(h_tilda_t.shape[0], -1)], dim=1)
             # eq 2
             i_t = torch.sigmoid(self.W_i(inp))
